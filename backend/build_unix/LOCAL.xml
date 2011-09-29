@@ -15,7 +15,7 @@
 	<target name="LOCAL" description="Build UVA Dashboard for local development.">
 		<delete dir="${LOCAL.filesystem.target}" />
 		<copy todir="${LOCAL.filesystem.target}">
-			<fileset refid="backend" />
+			<fileset refid="backend"/>
 		</copy>
     </target>
 </project>
