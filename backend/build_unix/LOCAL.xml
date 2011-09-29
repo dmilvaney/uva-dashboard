@@ -1,0 +1,21 @@
+<?xml version="1.0"  encoding="UTF-8" ?>
+<project name="uva-dashboard" basedir="." default="LOCAL">
+
+	<property file="build_unix/build.properties" />
+	
+	<fileset dir="." id="backend">
+		<include name="**" />
+		<exclude name="build**"/>
+		<exclude name=".**"/>
+	</fileset>
+	
+	<!-- ============================================ -->
+	<!-- (DEFAULT) Target: LOCAL 					  -->
+	<!-- ============================================ -->
+	<target name="LOCAL" description="Build UVA Dashboard for local development.">
+		<delete dir="${LOCAL.filesystem.target}" />
+		<copy todir="${LOCAL.filesystem.target}">
+			<fileset refid="backend" />
+		</copy>
+    </target>
+</project>
