@@ -1,41 +1,36 @@
 <?php
 
+	/*
+	 * Ignore parsing errors related
+	 * to any malformed XML that is returned to us.
+	 */
 	libxml_use_internal_errors(true);
 	
 	include_once('includes/HTTPAgent.php');
 	
 	$agent = new HTTPAgent();
 	
-	$REDIRECT_URL_TEMPLATE = 'https://shib0.itc.virginia.edu/shibboleth-idp/SSO?shire=https%3A%2F%2Fuofvirginia.netcardmanager.com%2FShibboleth.sso%2FSAML%2FPOST&time=&target=https%3A%2F%2Fuofvirginia.netcardmanager.com%2Fstudent%2Flocal_login.php&providerId=https%3A%2F%2Fuofvirginia.netcardmanager.com';
-	
-	function parse_redirect($response) {
-		$redirect_pos = strpos($response,'Location:');
-		if($redirect_pos!=false) {
-			$redirect = substr($response, $redirect_pos);
-			$parts = preg_split('[\n]', $redirect);
-			if(count($parts)>0)
-			$redirect = $parts[0];
-		}
-		$redirect = trim(substr($redirect, strpos($redirect,'http')));
-		return $redirect;
-	}
-	
 	/*
+	 * This URL is used twice; it directs Shibboleth to
+	 * the protected resource we need to access (in this case, UVA's Card Services page).
+	 * The "target" parameter value has been changed from "cookie" to the
+	 * URL we wish to access (since Shibboleth refuses to reference the shibstate
+	 * cookie for some reason). Note that "time" has been
+	 * blanked out, which doesn't cause the auth procedure to fail.
+	 */
+	$REDIRECT_URL = 'https://shib0.itc.virginia.edu/shibboleth-idp/SSO?shire=https%3A%2F%2Fuofvirginia.netcardmanager.com%2FShibboleth.sso%2FSAML%2FPOST&time=&target=https%3A%2F%2Fuofvirginia.netcardmanager.com%2Fstudent%2Flocal_login.php&providerId=https%3A%2F%2Fuofvirginia.netcardmanager.com';
+	
+   /*
 	* REQUEST #1
 	*/
-	$response = $agent->GET('https://uofvirginia.netcardmanager.com/student/local_login.php', true);
+	$agent->GET('https://uofvirginia.netcardmanager.com/student/local_login.php', true);
 	
-	$REDIRECT = parse_redirect($response);
-	$REDIRECT = substr($REDIRECT, strpos($REDIRECT, 'time'));
-	$REDIRECT = substr($REDIRECT, 0, strpos($REDIRECT, "&target"));
-	$REDIRECT = str_replace("time=", $REDIRECT, $REDIRECT_URL_TEMPLATE);
-	
-	/*
+   /*
 	* REQUEST #2
 	*/
-	$response = $agent->GET($REDIRECT, true);
+	$agent->GET($REDIRECT_URL, true);
 	
-	/*
+   /*
 	* REQUEST #3
 	*/
 	$response = $agent->GET('https://netbadge.virginia.edu/', false);
@@ -50,7 +45,7 @@
 		$formPostStr .= '&' . $inputs->item($i)->getAttribute('name') . '=' . $inputs->item($i)->getAttribute('value');
 	}
 	
-	/*
+   /*
 	* REQUEST #4
 	*/
 	$response = $agent->POST('https://netbadge.virginia.edu/index.cgi', $formPostStr, true);
@@ -60,18 +55,11 @@
 		error_log('invalid-credentials');
 		exit();
 	}
-
-	$REDIRECT = substr($response, strpos($response, "window.location.replace('"));
-	$REDIRECT = substr($REDIRECT, strpos($REDIRECT, "https://"));
-	$REDIRECT = substr($REDIRECT, 0, strpos($REDIRECT, "')\">"));
-	$REDIRECT = substr($REDIRECT, strpos($REDIRECT, 'time'));
-	$REDIRECT = substr($REDIRECT, 0, strpos($REDIRECT, "&amp;target"));
-	$REDIRECT = str_replace("time=", $REDIRECT, $REDIRECT_URL_TEMPLATE);
 	
-	/*
+   /*
 	* REQUEST #5
 	*/
-	$response = $agent->GET($REDIRECT, true);
+	$response = $agent->GET($REDIRECT_URL, true);
 	
 	$dom = new DOMDocument;
 	$dom->loadHTML($response);
@@ -79,7 +67,10 @@
 	$inputs = $xpath->evaluate('//input[@type="hidden"]');
 
 	/*
-	 * MUST URL ENCODE THE POST PARAMTER VALUES OR SHIBBOLETH WONT BE ABLE TO DECODE THE SAMLRESPONSE PARAMETER
+	 * Note that the POST data values are encoded using "urlencode".
+	 * This is required; otherwise, Shibboleth will be unable to
+	 * base64 decode the SAMLResponse parameter, which in turn prevents
+	 * Shibboleth from assigning us a valid authenticated session.
 	 */
 	$formPostStr = '';
 	for($i = 0; $i < $inputs->length; $i++) {
@@ -87,21 +78,19 @@
 	}
 	$formPostStr = substr($formPostStr, 1);
 	
-	/*
+   /*
 	* REQUEST #6
 	*/
-	$response = $agent->POST('https://uofvirginia.netcardmanager.com/Shibboleth.sso/SAML/POST', $formPostStr, true);
+	$agent->POST('https://uofvirginia.netcardmanager.com/Shibboleth.sso/SAML/POST', $formPostStr, true);
 	
-	/*
+   /*
 	* REQUEST #7
 	*/
-	$response = $agent->GET('https://uofvirginia.netcardmanager.com/student/local_login.php', true);
+	$agent->GET('https://uofvirginia.netcardmanager.com/student/local_login.php', true);
 	
-	/*
+   /*
 	* REQUEST #8
 	*/
-	$response = $agent->GET('https://uofvirginia.netcardmanager.com/student/welcome.php', false);
-	
-	echo $response;
+	echo $agent->GET('https://uofvirginia.netcardmanager.com/student/welcome.php', false);
 	
 ?>
