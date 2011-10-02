@@ -1,16 +1,15 @@
 <?php
 
-	/*
-	 * TODO: Securitize all incoming inputs.
-	 */
-
 	libxml_use_internal_errors(true);
-	
-	include_once('SISBroker.php');
-	
-	function parse_cookies($response) {
-		$cookie_str = '';
-		$headers = preg_split("[\n|\r]", substr($response, 0, strpos($response, '<html')));
+
+	function parse_cookies($response, $cookie_arr) {
+		if(strpos($response, '<html') !== false) {
+			$body = substr($response, 0, strpos($response, '<html'));
+		} else {
+			$body = $response;
+		}
+		$headers = preg_split("[\n|\r]", $body);
+		error_log(count($headers));
 		foreach($headers as $header) {
 			if(strpos($header, 'Set-Cookie: ')!==FALSE) {
 				$parts = preg_split('[Set-Cookie: ]', $header);
@@ -19,139 +18,263 @@
 				$breakSemi = strpos($cookie, '; ');
 				$key = substr($cookie, 0, $breakEquals);
 				$value = substr($cookie, $breakEquals+1, $breakSemi-$breakEquals-1);
-				$cookie_str .= $key . '=' . $value . '; ';
+				$cookie_arr[$key] = $value;
 			}
+		}
+		return $cookie_arr;
+	}
+	
+	function generate_cookie_str($cookie_arr) {
+		$cookie_str = '';
+		foreach($cookie_arr as $key=>$value) {
+			$cookie_str .= $key . '=' . $value . '; ';
 		}
 		return $cookie_str;
 	}
-
-	function authenticate() {
 	
-		try {
-			$broker = new SISBroker('authenticate');
-			$cookie_str = '';
-			
-			/*
-			 * REQUEST #1 (POST)
-			 * Issued to get the pubcookie_pre_s and pubcookie_g_req cookies.
-			 */
-			$response = $broker->transact(array('HttpMethod'=>'POST','NeedHeader'=>'true','Path'=>'https://www.virginia.edu/ssp/login/login.sucgi?env=/EPPRD','PostParams'=>'%C3%82%E2%80%9Dsubmit%C3%82%E2%80%9D=SIS+Login'));
-			
-			$pre_s_pos = strpos($response,'pubcookie_pre_s=');
-			if($pre_s_pos!=false) {
-				$pubcookie_pre_s = substr($response, $pre_s_pos);
-				$parts = preg_split('[;\s]', $pubcookie_pre_s);
-				if(count($parts)>0)
-					$pubcookie_pre_s = $parts[0];
-			}
-			
-			$g_req_pos = strpos($response,'pubcookie_g_req=');
-			if($g_req_pos!=false) {
-				$pubcookie_g_req = substr($response, $g_req_pos);
-				$parts = preg_split('[;\s]', $pubcookie_g_req);
-				if(count($parts)>0)
-					$pubcookie_g_req = $parts[0];
-			}
-			
-			/*
-			 * REQUEST #2 (POST)
-			 * Retrieves the login form that will be POSTed next.
-			 *  - Note: CURLOPT_HEADER is set to false since the header is not needed in this response.
-			 */
-			$response = $broker->transact(array('HttpMethod'=>'POST','NeedHeader'=>'false','Path'=>'https://netbadge.virginia.edu/','PostParams'=>'post_stuff=%25C3%2582%25E2%2580%259Dsubmit%25C3%2582%25E2%2580%259D%3DSIS%2BLogin&submit=Click+here+to+continue','CookieJar'=>$pubcookie_g_req));
-			
-			$dom = new DOMDocument;
-			$dom->loadHTML($response);
-			$xpath = new DOMXPath($dom);
-			$inputs = $xpath->evaluate('/html/body/div/div/div/fieldset/span/form[@action="index.cgi"]/input[@type="hidden"]');
-			
-			$formPostStr = 'user=mjq4aq&pass=<redacted>';
-			
-			for($i = 0; $i < $inputs->length; $i++)
-				$formPostStr .= '&' . $inputs->item($i)->getAttribute('name') . '=' . $inputs->item($i)->getAttribute('value');
-			
-			/*
-			 * REQUEST #3 (POST)
-			 * Sends the login credentials to NetBadge.
-			 * We need pubcookie_g from the response.
-			 */
-			$response = $broker->transact(array('HttpMethod'=>'POST','NeedHeader'=>'true','Path'=>'https://netbadge.virginia.edu/index.cgi','PostParams'=>$formPostStr));
-			
-			global $TSRTUNNEL_VERIFY_FLAG;
-			global $TSRTUNNEL_VERIFY_RESULT;
-			if(strpos($response, '<div id="loginError">') == true) {
-				if(isset($TSRTUNNEL_VERIFY_FLAG) && $TSRTUNNEL_VERIFY_FLAG) {
-					$TSRTUNNEL_VERIFY_RESULT = false;
-					return;
-				}
-				$builder = new ResponseBuilder('invalid_credentials');
-				$builder->echoResponse();
-				exit();
-			} else {
-				if(isset($TSRTUNNEL_VERIFY_FLAG) && $TSRTUNNEL_VERIFY_FLAG) {
-					$TSRTUNNEL_VERIFY_RESULT = true;
-					return;
-				}
-			}
-			
-			$g_pos = strpos($response,'pubcookie_g=');
-			if($g_pos!=false) {
-				$pubcookie_g = substr($response, $g_pos);
-				$parts = preg_split('[;\s]', $pubcookie_g);
-				if(count($parts)>0)
-					$pubcookie_g = $parts[0];
-			}
-			
-			/*
-			 * REQUEST #4 (POST)
-			 * Sends pubcookie_g and pubcookie_pre_s to server.
-			 * We need the form with sha1, random, time, etc. from the response.
-			 */
-			$response = $broker->transact(array('HttpMethod'=>'POST','NeedHeader'=>'false','Path'=>'https://www.virginia.edu/ssp/login/login.sucgi?env=/EPPRD','PostParams'=>'%C3%82%E2%80%9Dsubmit%C3%82%E2%80%9D=SIS+Login','CookieJar'=>($pubcookie_pre_s.'; '.$pubcookie_g.'; ')));
-			
-			$dom = new DOMDocument;
-			$dom->loadHTML($response);
-			$xpath = new DOMXPath($dom);
-			$inputs = $xpath->evaluate('/html/body/form/input[@type="hidden"]');
-			
-			$formPostStr = '';
-			for($i = 0; $i < $inputs->length; $i++)
-				$formPostStr .= $inputs->item($i)->getAttribute('name') . '=' . $inputs->item($i)->getAttribute('value') . '&';
-				
-			$formPostStr = substr($formPostStr, 0, strlen($formPostStr)-1);
-			
-			/*
-			 * REQUEST #5 (POST)
-			 * Sends sha1, time, random, username to server.
-			 * We (finally) get PS_TOKEN from the response.
-			 */
-			$cookie_str.=parse_cookies($broker->transact(array('HttpMethod'=>'POST','NeedHeader'=>'true','Path'=>'https://sisuva.admin.virginia.edu/psp/epprd/EMPLOYEE/EMPL/h/?tab=DEFAULT','PostParams'=>$formPostStr)));
-			
-			/*
-			 * REQUEST #6 (POST)
-			 * This gets cookies specific to executing SIS queries.
-			 */
-			$cookie_str.=parse_cookies($broker->transact(array('HttpMethod'=>'GET','NeedHeader'=>'true','Path'=>'https://sisuva.admin.virginia.edu/psp/epprd/EMPLOYEE/EMPL/h/?tab=DEFAULT','CookieJar'=>$cookie_str)));
-			
-			/*
-			 * REQUEST #7 (POST)
-			 * This also gets cookies specific to executing SIS queries.
-			 */
-			$cookie_str.=parse_cookies($broker->transact(array('HttpMethod'=>'POST','NeedHeader'=>'true','Path'=>'https://sisuvacs.admin.virginia.edu/psc/csprd/EMPLOYEE/PSFT_HR_CSPRD/c/SA_LEARNER_SERVICES.SSS_STUDENT_CENTER.GBL','CookieJar'=>$cookie_str,'PostParams'=>$formPostStr)));
-			
-			echo $cookie_str;
-			return $cookie_str;
+	function parse_redirect($response) {
+		$redirect_pos = strpos($response,'Location:');
+		if($redirect_pos!=false) {
+			$redirect = substr($response, $redirect_pos);
+			$parts = preg_split('[\n]', $redirect);
+			if(count($parts)>0)
+			$redirect = $parts[0];
 		}
-		catch (Exception $e) {
-			error_log('Exception Caught in (authenticate.php): ' . $e->getMessage());
-			exit();
-		}
+		$redirect = trim(substr($redirect, strpos($redirect,'http')));
+		return $redirect;
+	}
+	
+	$curlHandle = curl_init();
+	curl_setopt($curlHandle, CURLOPT_SSLVERSION, 3);
+	curl_setopt($curlHandle, CURLOPT_SSL_VERIFYHOST, FALSE);
+	curl_setopt($curlHandle, CURLOPT_SSL_VERIFYPEER, FALSE);
+	curl_setopt($curlHandle, CURLOPT_VERBOSE, FALSE);
+	curl_setopt($curlHandle, CURLOPT_RETURNTRANSFER, TRUE);
+	curl_setopt($curlHandle, CURLOPT_USERAGENT, 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.7; rv:6.0.2) Gecko/20100101 Firefox/6.0.2');
+	curl_setopt($curlHandle, CURLOPT_COOKIE, '');
+	curl_setopt($curlHandle, CURLOPT_ENCODING, 'gzip, deflate');
+	curl_setopt($curlHandle, CURLOPT_HTTPHEADER, array("Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"));
+	curl_setopt($curlHandle, CURLOPT_HTTPHEADER, array("Accept-Language: en-us,en;q=0.5"));
+	
+	$COOKIE_JAR = array();
+	
+	/*
+	* REQUEST #0 (GET)
+	*/
+	curl_setopt($curlHandle, CURLOPT_POST, false);
+	curl_setopt($curlHandle, CURLOPT_HEADER, true);
+	curl_setopt($curlHandle, CURLOPT_URL, 'https://uofvirginia.netcardmanager.com/student/local_login.php');
+	curl_setopt($curlHandle, CURLOPT_COOKIE, generate_cookie_str($COOKIE_JAR));
+	
+	$response = curl_exec($curlHandle);
+	if($response === false) {
+		error_log("FATAL: GET 0 request failed.");
+		exit();
+	}
+	$COOKIE_JAR = parse_cookies($response, $COOKIE_JAR);
+	$REDIRECT = parse_redirect($response);
+	
+	//echo $REDIRECT . "<br/><br/><br/>";
+	
+	$template = 'https://shib0.itc.virginia.edu/shibboleth-idp/SSO?shire=https%3A%2F%2Fuofvirginia.netcardmanager.com%2FShibboleth.sso%2FSAML%2FPOST&time=&target=https%3A%2F%2Fuofvirginia.netcardmanager.com%2Fstudent%2Flocal_login.php&providerId=https%3A%2F%2Fuofvirginia.netcardmanager.com';
+	
+	$REDIRECT = substr($REDIRECT, strpos($REDIRECT, 'time'));
+	$REDIRECT = substr($REDIRECT, 0, strpos($REDIRECT, "&target"));
+	
+	//echo 'HERE: ' . $REDIRECT . "<br/><br/><br/>";
+	
+	$REDIRECT = str_replace("time=", $REDIRECT, $template);
+	
+	//echo $REDIRECT . "<br/><br/><br/>";
+	
+	/*
+	* REQUEST #1 (GET)
+	* Issued to get the pubcookie_pre_s and pubcookie_g_req cookies.
+	*/
+	curl_setopt($curlHandle, CURLOPT_POST, false);
+	curl_setopt($curlHandle, CURLOPT_HEADER, true);
+	curl_setopt($curlHandle, CURLOPT_URL, $REDIRECT);
+	curl_setopt($curlHandle, CURLOPT_COOKIE, generate_cookie_str($COOKIE_JAR));
+	
+	$response = curl_exec($curlHandle);
+	if($response === false) {
+		error_log("FATAL: GET 1 request failed.");
+		exit();
+	}
+	$COOKIE_JAR = parse_cookies($response, $COOKIE_JAR);
+	
+	/*
+	* REQUEST #3 (POST)
+	* Sends the login credentials to NetBadge.
+	* We need pubcookie_g from the response.
+	*/
+	curl_setopt($curlHandle, CURLOPT_POST, false);
+	curl_setopt($curlHandle, CURLOPT_HEADER, false);
+	curl_setopt($curlHandle, CURLOPT_URL, 'https://netbadge.virginia.edu/');
+	curl_setopt($curlHandle, CURLOPT_COOKIE, generate_cookie_str($COOKIE_JAR));
+	
+	$response = curl_exec($curlHandle);
+	if($response === false) {
+		error_log("FATAL: GET 1 request failed.");
+		exit();
+	}
+	$COOKIE_JAR = parse_cookies($response, $COOKIE_JAR);
+	
+	$dom = new DOMDocument;
+	$dom->loadHTML($response);
+	$xpath = new DOMXPath($dom);
+	$inputs = $xpath->evaluate('/html/body/div/div/div/fieldset/span/form[@action="index.cgi"]/input[@type="hidden"]');
+		
+	$formPostStr = 'user=mjq4aq&pass=<redacted>';
+		
+	for($i = 0; $i < $inputs->length; $i++) {
+		$formPostStr .= '&' . $inputs->item($i)->getAttribute('name') . '=' . $inputs->item($i)->getAttribute('value');
 	}
 	
 	/*
-	 * Execution starts here.
-	 * Store the cookie string for parsers to retrieve if
-	 * this has been called by a parser.
+	* REQUEST #3 (POST)
+	* Sends the login credentials to NetBadge.
+	* We need pubcookie_g from the response.
+	*/
+	curl_setopt($curlHandle, CURLOPT_POST, true);
+	curl_setopt($curlHandle, CURLOPT_HEADER, true);
+	curl_setopt($curlHandle, CURLOPT_URL, 'https://netbadge.virginia.edu/index.cgi');
+	curl_setopt($curlHandle, CURLOPT_POSTFIELDS, $formPostStr);
+	curl_setopt($curlHandle, CURLOPT_COOKIE, generate_cookie_str($COOKIE_JAR));
+	
+	$response = curl_exec($curlHandle);
+	if($response === false) {
+		error_log("FATAL: GET 1 request failed.");
+		exit();
+	}
+	$COOKIE_JAR = parse_cookies($response, $COOKIE_JAR);
+	
+	if(strpos($response, '<div id="loginError">') == true) {
+		/*
+		 * TODO: Handle
+		*/
+		error_log('invalid-credentials');
+		exit();
+	}
+
+	$REDIRECT = substr($response, strpos($response, "window.location.replace('"));
+	$REDIRECT = substr($REDIRECT, strpos($REDIRECT, "https://"));
+	$REDIRECT = substr($REDIRECT, 0, strpos($REDIRECT, "')\">"));
+	
+// 	echo $REDIRECT;
+// 	echo "<br/><br/></br>";
+	
+// 	$REDIRECT = str_replace('target=cookie', 'target=https%3A%2F%2Fuofvirginia.netcardmanager.com%2Fstudent%2Flocal_login.php', $REDIRECT);
+// 	echo $REDIRECT;
+
+	//echo $REDIRECT . "<br/><br/><br/>";
+	
+	$template = 'https://shib0.itc.virginia.edu/shibboleth-idp/SSO?shire=https%3A%2F%2Fuofvirginia.netcardmanager.com%2FShibboleth.sso%2FSAML%2FPOST&time=&target=https%3A%2F%2Fuofvirginia.netcardmanager.com%2Fstudent%2Flocal_login.php&providerId=https%3A%2F%2Fuofvirginia.netcardmanager.com';
+	
+	$REDIRECT = substr($REDIRECT, strpos($REDIRECT, 'time'));
+	$REDIRECT = substr($REDIRECT, 0, strpos($REDIRECT, "&amp;target"));
+	
+	//echo $REDIRECT;
+	
+	$REDIRECT = str_replace("time=", $REDIRECT, $template);
+	
+	//echo $REDIRECT;
+	
+	/*
+	* REQUEST #4 (GET)
+	* Sends pubcookie_g and pubcookie_pre_s to server.
+	* We need the form with sha1, random, time, etc. from the response.
+	*/
+	curl_setopt($curlHandle, CURLOPT_REFERER, 'https://netbadge.virginia.edu/index.cgi');
+	curl_setopt($curlHandle, CURLOPT_POST, false);
+	curl_setopt($curlHandle, CURLOPT_HEADER, true);
+	
+	/*
+	 * Prevent Shibboleth from looking at the cookie store for redirect info; just tell
+	* it via the URL
+	*/
+	//curl_setopt($curlHandle, CURLOPT_URL, 'https://shib0.itc.virginia.edu/shibboleth-idp/SSO?shire=https%3A%2F%2Fuofvirginia.netcardmanager.com%2FShibboleth.sso%2FSAML%2FPOST&time=1317515214&target=https%3A%2F%2Fuofvirginia.netcardmanager.com%2Fstudent%2Flocal_login.php&providerId=https%3A%2F%2Fuofvirginia.netcardmanager.com');
+	curl_setopt($curlHandle, CURLOPT_URL, $REDIRECT);
+	curl_setopt($curlHandle, CURLOPT_COOKIE, generate_cookie_str($COOKIE_JAR));
+	
+	$response = curl_exec($curlHandle);
+	if($response === false) {
+		error_log("FATAL: GET 1 request failed.");
+		exit();
+	}
+	$COOKIE_JAR = parse_cookies($response, $COOKIE_JAR);
+	
+	$dom = new DOMDocument;
+	$dom->loadHTML($response);
+	$xpath = new DOMXPath($dom);
+	$inputs = $xpath->evaluate('//input[@type="hidden"]');
+	$formPostStr = '';
+
+	/*
+	 * MUST URL ENCODE THE POST PARAMTER VALUES OR SHIBBOLETH WONT BE ABLE TO DECODE THE SAMLRESPONSE PARAMETER
 	 */
-	$cookie_str = authenticate();
+	for($i = 0; $i < $inputs->length; $i++) {
+		$formPostStr .= '&' . $inputs->item($i)->getAttribute('name') . '=' . urlencode($inputs->item($i)->getAttribute('value'));
+	}
+	$formPostStr = substr($formPostStr, 1);
+	
+	/*
+	* REQUEST #4 (POST)
+	* Sends pubcookie_g and pubcookie_pre_s to server.
+	* We need the form with sha1, random, time, etc. from the response.
+	*/
+	curl_setopt($curlHandle, CURLOPT_POST, true);
+	curl_setopt($curlHandle, CURLOPT_HEADER, true);
+	curl_setopt($curlHandle, CURLOPT_URL, 'https://uofvirginia.netcardmanager.com/Shibboleth.sso/SAML/POST');
+	curl_setopt($curlHandle, CURLOPT_POSTFIELDS, $formPostStr);
+	curl_setopt($curlHandle, CURLOPT_COOKIE, generate_cookie_str($COOKIE_JAR));
+	
+	$response = curl_exec($curlHandle);
+	if($response === false) {
+		error_log("FATAL: GET 1 request failed.");
+		exit();
+	}
+	$COOKIE_JAR = parse_cookies($response, $COOKIE_JAR);
+	$REDIRECT = parse_redirect($response);
+	
+	/*
+	* REQUEST #5 (GET)
+	* Sends pubcookie_g and pubcookie_pre_s to server.
+	* We need the form with sha1, random, time, etc. from the response.
+	*/
+	curl_setopt($curlHandle, CURLOPT_POST, false);
+	curl_setopt($curlHandle, CURLOPT_HEADER, true);
+	curl_setopt($curlHandle, CURLOPT_URL, 'https://uofvirginia.netcardmanager.com/student/local_login.php');
+	curl_setopt($curlHandle, CURLOPT_COOKIE, generate_cookie_str($COOKIE_JAR));
+	
+	$response = curl_exec($curlHandle);
+	if($response === false) {
+		error_log("FATAL: GET 1 request failed.");
+		exit();
+	}
+	$COOKIE_JAR = parse_cookies($response, $COOKIE_JAR);
+	
+	error_log($response);
+	echo $COOKIE_JAR;
+	
+	/*
+	* REQUEST #6 (GET)
+	* Sends pubcookie_g and pubcookie_pre_s to server.
+	* We need the form with sha1, random, time, etc. from the response.
+	*/
+	curl_setopt($curlHandle, CURLOPT_POST, false);
+	curl_setopt($curlHandle, CURLOPT_HEADER, true);
+	curl_setopt($curlHandle, CURLOPT_URL, 'https://uofvirginia.netcardmanager.com/student/welcome.php');
+	curl_setopt($curlHandle, CURLOPT_COOKIE, generate_cookie_str($COOKIE_JAR));
+	
+	$response = curl_exec($curlHandle);
+	if($response === false) {
+		error_log("FATAL: GET 1 request failed.");
+		exit();
+	}
+	$COOKIE_JAR = parse_cookies($response, $COOKIE_JAR);
+	
+	error_log($response);
+	exit();
+	
 ?>

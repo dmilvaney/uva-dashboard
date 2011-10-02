@@ -7,8 +7,6 @@ class SISBroker
 	private $curl_handle;
 	private $persistentCookieJar;
 	private $transactionCookieJar;
-									  
-	const GBL_PATH_PREFIX = 'https://sisuvacs.admin.virginia.edu/psc/csprd/EMPLOYEE/PSFT_HR_CSPRD/c/';
 	
 	public function __construct($job_type, $cookie_jar = '') {
 		$this->job_type = $job_type;
@@ -24,42 +22,7 @@ class SISBroker
 		$this->persistentCookieJar = $cookie_jar;
 	}
 	
-	public function transact($job_args) {
-		if($this->job_type!='authenticate' && $this->job_type!='parser_authenticate') {
-			$job_args['CookieJar'] = $this->persistentCookieJar;
-		}
-		
-		/*
-		 * Process any request customizations for
-		 * non-authentication jobs.
-		 */
-		if($this->job_type!='authenticate' && $this->job_type!='parser_authenticate') {
-			if(isset($job_args['DoPathPrefix']) && !$job_args['DoPathPrefix']) {
-				//Don't alter path.
-			} else {
-				$job_args['Path'] = self::GBL_PATH_PREFIX . $job_args['Path'];
-			}
-			
-			if($job_args['HttpMethod']=='POST') {
-				if(strpos($this->job_type, 'parser_')===false) {
-					$records = pg_exec($this->dbConnection, "SELECT \"ICStateNum\", \"ICSID\" FROM authenticated_sessions WHERE access_key='".$_COOKIE['access_key']."';");
-					
-					if($records!=false && (pg_num_rows($records)==1)) {
-						$access_vars = pg_fetch_assoc($records);
-						$job_args['PostParams'].='&ICSID='.$access_vars['ICSID'].'&ICStateNum='.$access_vars['ICStateNum'];
-					} else {
-						error_log("FATAL ERROR: Unable to retrieve access vars from database.");
-					}
-				} else {
-					$job_args['PostParams'].='&ICSID='.$job_args['ICSID'].'&ICStateNum='.$job_args['ICStateNum'];
-				}
-			}
-		}
-		
-		if(!isset($job_args['CookieJar'])) {
-			$job_args['CookieJar'] = '';
-		}
-		
+	public function transact($job_args) {		
 		/*
 		 * Execute job using local cURL.
 		 */
@@ -76,7 +39,8 @@ class SISBroker
 		}
 		
 		curl_setopt($this->curl_handle, CURLOPT_POST, false);
-		//TODO: Don't be a fucking dipshit about this.
+		
+		//TODO: Do this better.
 		if($needHeader=='true') {
 			curl_setopt($this->curl_handle, CURLOPT_HEADER, true);
 		} else {
@@ -84,6 +48,9 @@ class SISBroker
 		}
 		curl_setopt($this->curl_handle, CURLOPT_URL, $path);
 		curl_setopt($this->curl_handle, CURLOPT_COOKIE, $this->transactionCookieJar);
+		
+		//error_log('COOKIE JAR');
+		//error_log($this->transactionCookieJar);
 		
 		$response = curl_exec($this->curl_handle);
 		//error_log($response);
@@ -102,7 +69,8 @@ class SISBroker
 		}
 		
 		curl_setopt($this->curl_handle, CURLOPT_POST, true);
-		//TODO: Don't be a fucking dipshit about this.
+		
+		//TODO: Do this better.
 		if($needHeader=='true') {
 			curl_setopt($this->curl_handle, CURLOPT_HEADER, true);
 		} else {
